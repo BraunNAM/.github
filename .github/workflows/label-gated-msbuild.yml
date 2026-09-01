@@ -24,6 +24,12 @@ on:
         required: false
         type: string
         default: Release
+      extra-msbuild-args:
+        description: >
+          Additional MSBuild arguments appended after /p:Configuration=... (e.g. /p:Platform="Any CPU")
+        required: false
+        type: string
+        default: ''
       runs-on:
         description: Runner image
         required: false
@@ -43,7 +49,8 @@ jobs:
       - uses: NuGet/setup-nuget@v2
 
       - name: Restore NuGet packages
-        run: nuget restore ${{ inputs.solution }} -SolutionDirectory ${{ inputs.nuget-solution-directory }}
+        run: nuget restore "${{ inputs.solution }}" -SolutionDirectory ${{ inputs.nuget-solution-directory }}
 
       - name: Build
-        run: msbuild ${{ inputs.solution }} /p:Configuration=${{ inputs.configuration }} /m
+        run: msbuild "${{ inputs.solution }}" /p:Configuration=${{ inputs.configuration }} ${{ inputs.extra-msbuild-args }} /m
+

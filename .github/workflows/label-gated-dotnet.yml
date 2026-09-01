@@ -43,4 +43,4 @@ jobs:
           dotnet-version: ${{ inputs.dotnet-version }}
 
       - name: Build
-        run: dotnet build ${{ inputs.solution }} --configuration ${{ inputs.configuration }}
+        run: dotnet build "${{ inputs.solution }}" --configuration ${{ inputs.configuration }}

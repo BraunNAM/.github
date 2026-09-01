@@ -1,0 +1,46 @@
+name: Label-Gated dotnet Build
+
+on:
+  workflow_call:
+    inputs:
+      job-name:
+        description: Display name shown in the Actions UI
+        required: false
+        type: string
+        default: Build (.NET SDK)
+      solution:
+        description: Path to the .sln or .csproj to build (relative to repo root)
+        required: true
+        type: string
+      dotnet-version:
+        description: .NET SDK version (e.g. 8.0.x, 6.0.x)
+        required: false
+        type: string
+        default: 8.0.x
+      configuration:
+        description: Build configuration
+        required: false
+        type: string
+        default: Release
+      runs-on:
+        description: Runner image
+        required: false
+        type: string
+        default: windows-2022
+
+jobs:
+  build:
+    if: >
+      github.event_name == 'push' ||
+      contains(github.event.pull_request.labels.*.name, 'Auto Build & Test')
+    name: ${{ inputs.job-name }}
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+
+      - name: Build
+        run: dotnet build ${{ inputs.solution }} --configuration ${{ inputs.configuration }}

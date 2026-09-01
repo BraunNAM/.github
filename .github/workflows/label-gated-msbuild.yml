@@ -1,0 +1,49 @@
+name: Label-Gated MSBuild
+
+on:
+  workflow_call:
+    inputs:
+      job-name:
+        description: Display name shown in the Actions UI
+        required: false
+        type: string
+        default: Build (.NET / MSBuild)
+      solution:
+        description: Path to the .sln or .csproj to build (relative to repo root)
+        required: true
+        type: string
+      nuget-solution-directory:
+        description: >
+          -SolutionDirectory value for nuget restore. Defaults to '.' (repo root).
+          Set to a subdirectory if hint paths in the project expect packages there.
+        required: false
+        type: string
+        default: .
+      configuration:
+        description: MSBuild configuration
+        required: false
+        type: string
+        default: Release
+      runs-on:
+        description: Runner image
+        required: false
+        type: string
+        default: windows-2022
+
+jobs:
+  build:
+    if: >
+      github.event_name == 'push' ||
+      contains(github.event.pull_request.labels.*.name, 'Auto Build & Test')
+    name: ${{ inputs.job-name }}
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: microsoft/setup-msbuild@v2
+      - uses: NuGet/setup-nuget@v2
+
+      - name: Restore NuGet packages
+        run: nuget restore ${{ inputs.solution }} -SolutionDirectory ${{ inputs.nuget-solution-directory }}
+
+      - name: Build
+        run: msbuild ${{ inputs.solution }} /p:Configuration=${{ inputs.configuration }} /m

@@ -37,10 +37,20 @@ on:
         default: windows-2022
 
 jobs:
+  gate:
+    name: Build Gate (requires 'Auto Build & Test' label)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check gating label
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then exit 0; fi
+          echo '${{ toJson(github.event.pull_request.labels.*.name) }}' | grep -q "Auto Build & Test" || {
+            echo "::error::This PR requires the 'Auto Build & Test' label before CI will build it. Add the label to trigger the build."
+            exit 1
+          }
+
   build:
-    if: >
-      github.event_name == 'push' ||
-      contains(github.event.pull_request.labels.*.name, 'Auto Build & Test')
+    needs: gate
     name: ${{ inputs.job-name }}
     runs-on: ${{ inputs.runs-on }}
     steps:

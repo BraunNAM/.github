@@ -1,0 +1,107 @@
+name: Publish Release Artifact to Azure Blob
+
+# Reusable workflow: uploads a previously-built release artifact (from an actions/upload-artifact
+# step in the caller's own build job) to the shared "release sync" Azure Storage account so that
+# PDQ Deploy (or any other puller) can pick it up without ever touching GitHub credentials.
+#
+# See scripts/pdq/README.md in this repo for the full system this is one half of, including how
+# to onboard a new app (create its container + stored access policies + secrets) and how the PDQ
+# side (scripts/pdq/Sync-ReleaseFromBlob.ps1) consumes what this workflow publishes.
+
+on:
+  workflow_call:
+    inputs:
+      job-name:
+        description: Display name shown in the Actions UI
+        required: false
+        type: string
+        default: Publish to release sync blob
+      artifact-name:
+        description: Name of the actions/upload-artifact artifact (from the caller's build job) containing the file to publish
+        required: true
+        type: string
+      file-name:
+        description: Name of the file inside that artifact to upload
+        required: true
+        type: string
+      storage-account:
+        description: Azure Storage account name (e.g. stnamreleasesync)
+        required: true
+        type: string
+      container:
+        description: Blob container name dedicated to this app (one container per onboarded app)
+        required: true
+        type: string
+      blob-name:
+        description: Destination blob name for the "latest" copy (e.g. MyApp-Prod.msi). Overwritten on every run.
+        required: true
+        type: string
+      archive-blob-name:
+        description: Optional additional destination blob name for a versioned/history copy (e.g. archive/MyApp-Prod-1.2.3.msi). Omit to skip.
+        required: false
+        type: string
+        default: ""
+      runs-on:
+        description: Runner image
+        required: false
+        type: string
+        default: ubuntu-latest
+    secrets:
+      sas-token:
+        description: Container-scoped SAS query string tied to that container's "publisher" stored access policy (Write+Add+Create). Without the leading '?'.
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: ${{ inputs.job-name }}
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: _publish
+
+      - name: Compute checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd _publish
+          sha256sum "${{ inputs.file-name }}" | awk '{print $1}' > "${{ inputs.file-name }}.sha256"
+
+      - name: Upload "latest" copy + checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          account="${{ inputs.storage-account }}"
+          container="${{ inputs.container }}"
+          sas="${{ secrets.sas-token }}"
+          cd _publish
+          az storage blob upload \
+            --account-name "$account" --container-name "$container" \
+            --name "${{ inputs.blob-name }}" --file "${{ inputs.file-name }}" \
+            --sas-token "$sas" --overwrite --no-progress
+          az storage blob upload \
+            --account-name "$account" --container-name "$container" \
+            --name "${{ inputs.blob-name }}.sha256" --file "${{ inputs.file-name }}.sha256" \
+            --sas-token "$sas" --overwrite --no-progress
+
+      - name: Upload versioned archive copy
+        if: inputs.archive-blob-name != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          account="${{ inputs.storage-account }}"
+          container="${{ inputs.container }}"
+          sas="${{ secrets.sas-token }}"
+          cd _publish
+          az storage blob upload \
+            --account-name "$account" --container-name "$container" \
+            --name "${{ inputs.archive-blob-name }}" --file "${{ inputs.file-name }}" \
+            --sas-token "$sas" --overwrite --no-progress
+          az storage blob upload \
+            --account-name "$account" --container-name "$container" \
+            --name "${{ inputs.archive-blob-name }}.sha256" --file "${{ inputs.file-name }}.sha256" \
+            --sas-token "$sas" --overwrite --no-progress

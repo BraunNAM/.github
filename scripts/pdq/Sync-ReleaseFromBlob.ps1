@@ -91,7 +91,16 @@ function Get-ReaderSasToken {
 
 function Get-RemoteText {
     param([string]$Url)
-    return (Invoke-WebRequest -Uri $Url -UseBasicParsing).Content.Trim()
+    # On Windows PowerShell 5.1, Invoke-WebRequest's .Content is a byte[] (not a string)
+    # when the response's Content-Type isn't a recognized text MIME type - as is the case
+    # for the .sha256 sidecar blob, which Azure serves as application/octet-stream. PowerShell
+    # 7+ doesn't have this quirk, so handle both to keep this script PS 5.1-compatible for
+    # PDQ Deploy servers that haven't been upgraded off Windows PowerShell.
+    $response = Invoke-WebRequest -Uri $Url -UseBasicParsing
+    if ($response.Content -is [byte[]]) {
+        return [System.Text.Encoding]::UTF8.GetString($response.Content).Trim()
+    }
+    return $response.Content.Trim()
 }
 
 $opCommand = Resolve-OpCommand

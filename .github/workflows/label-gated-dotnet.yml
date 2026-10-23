@@ -29,17 +29,20 @@ on:
         default: windows-2022
 
 jobs:
+  # push events (i.e. after a PR has already merged) always run; a
+  # pull_request run only proceeds once the gating label is added. This job
+  # SKIPS (does not fail) when the label is absent -- a failing
+  # required-looking check on every unlabeled push reads as a false CI
+  # failure/notification on routine PR activity in repos with no required
+  # status checks configured, and callers relying on `needs: gate` get the
+  # same skip propagated to their build job automatically.
   gate:
     name: Build Gate (requires 'Auto Build & Test' label)
+    if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'Auto Build & Test')
     runs-on: ubuntu-latest
     steps:
-      - name: Check gating label
-        run: |
-          if [[ "${{ github.event_name }}" == "push" ]]; then exit 0; fi
-          echo '${{ toJson(github.event.pull_request.labels.*.name) }}' | grep -q "Auto Build & Test" || {
-            echo "::error::This PR requires the 'Auto Build & Test' label before CI will build it. Add the label to trigger the build."
-            exit 1
-          }
+      - name: Gate passed
+        run: echo "Gate passed (push event or 'Auto Build & Test' label present)."
 
   build:
     needs: gate

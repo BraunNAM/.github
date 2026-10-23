@@ -1,0 +1,63 @@
+name: Label-Gated Node Build
+
+on:
+  workflow_call:
+    inputs:
+      job-name:
+        description: Display name shown in the Actions UI
+        required: false
+        type: string
+        default: Build & Test (Node)
+      working-directory:
+        description: Directory containing package.json (relative to repo root)
+        required: false
+        type: string
+        default: .
+      node-version:
+        description: Node.js version (e.g. 22.x, 20.x)
+        required: false
+        type: string
+        default: 22.x
+      runs-on:
+        description: Runner image
+        required: false
+        type: string
+        default: windows-2022
+
+jobs:
+  # push events (i.e. after a PR has already merged) always run; a
+  # pull_request run only proceeds once the gating label is added. This job
+  # SKIPS (does not fail) when the label is absent -- a failing
+  # required-looking check on every unlabeled push reads as a false CI
+  # failure/notification on routine PR activity in repos with no required
+  # status checks configured, and callers relying on `needs: gate` get the
+  # same skip propagated to their build job automatically.
+  gate:
+    name: Build Gate (requires 'Auto Build & Test' label)
+    if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'Auto Build & Test')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gate passed
+        run: echo "Gate passed (push event or 'Auto Build & Test' label present)."
+
+  build:
+    needs: gate
+    name: ${{ inputs.job-name }}
+    runs-on: ${{ inputs.runs-on }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Run CI (lint, typecheck, test, build)
+        run: npm run ci --if-present

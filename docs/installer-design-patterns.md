@@ -25,12 +25,16 @@ through:
 - a WiX custom action or `CustomActionData`,
 - any installer UI field (wizard or silent).
 
-MSI's built-in verbose-log redaction (`msiexec /l*v`) only masks **property *names*** containing
-`PASSWORD`. It does not inspect property *values*, so a credential that ends up embedded inside a
-*derived* command line — for example a generated `schtasks.exe` invocation built from a
-non-`PASSWORD`-named property like `WixQuietExecCmdLine` — is written to the log in plaintext. MSI
-logs are frequently retained by deployment tooling (`%windir%\Temp\MSI*.log`), so this is a real
-credential-leakage path, not a theoretical one.
+MSI's built-in verbose-log redaction (`msiexec /l*v`) only hides a property's **value** when that
+property's *exact name* is explicitly listed in `MsiHiddenProperties` — there's no automatic
+redaction just because a property's name contains `PASSWORD`. A credential that ends up embedded
+inside a *derived* command line — for example a generated `schtasks.exe` invocation built from a
+property like `WixQuietExecCmdLine` that isn't itself listed in `MsiHiddenProperties` — is written
+to the log in plaintext regardless of what the original property was named. (Even a property that
+*is* listed in `MsiHiddenProperties` can still leak if the installer's `Debug` policy is set to
+`7`, which forces verbose command-line logging.) MSI logs are frequently retained by deployment
+tooling (`%windir%\Temp\MSI*.log`), so this is a real credential-leakage path, not a theoretical
+one.
 
 **Pattern:** keep every credential-touching step in a separate, standalone, human-run script that
 prompts for the credential interactively (`Get-Credential`) and never persists or echoes it —

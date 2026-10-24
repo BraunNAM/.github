@@ -8,20 +8,21 @@ here.
 
 ## Shared CI/CD building blocks
 
-- **Reusable label-gated workflows** — [`workflows/label-gated-msbuild.yml`](workflows/label-gated-msbuild.yml),
-  [`workflows/label-gated-dotnet.yml`](workflows/label-gated-dotnet.yml),
-  [`workflows/label-gated-node.yml`](workflows/label-gated-node.yml). Call one of these from a
-  repo's own CI instead of hand-rolling a label-gated build/test job.
+- **Reusable label-gated workflows** — [`.github/workflows/label-gated-msbuild.yml`](.github/workflows/label-gated-msbuild.yml),
+  [`.github/workflows/label-gated-dotnet.yml`](.github/workflows/label-gated-dotnet.yml),
+  [`.github/workflows/label-gated-node.yml`](.github/workflows/label-gated-node.yml). Call one of
+  these from a repo's own CI instead of hand-rolling a label-gated build/test job.
 - **Release distribution (PDQ/Blob sync)** — [`scripts/pdq/README.md`](scripts/pdq/README.md) +
-  [`workflows/publish-release-to-blob.yml`](workflows/publish-release-to-blob.yml). A shared,
-  app-agnostic way to get a built release artifact from CI onto PDQ Deploy without ever putting a
-  GitHub credential near a deployment target.
+  [`.github/workflows/publish-release-to-blob.yml`](.github/workflows/publish-release-to-blob.yml).
+  A shared, app-agnostic way to get a built release artifact from CI onto PDQ Deploy without ever
+  putting a GitHub credential near a deployment target.
 - **Installer design patterns** — [`docs/installer-design-patterns.md`](docs/installer-design-patterns.md).
   If your app ships a WiX MSI and/or runs under a privileged service account (e.g. a Windows Task
   Scheduler job), read this **before** wiring up credential handling in your installer — it covers
-  a real credential-leakage pitfall (MSI log redaction only matches property *names*, not values)
-  and the resulting pattern of keeping credential-touching steps in a standalone script instead of
-  the installer.
+  a real credential-leakage pitfall (a credential's *value* is only hidden from MSI verbose logs
+  when its exact property name is explicitly listed in `MsiHiddenProperties` — there's no automatic
+  redaction based on the name containing `PASSWORD`) and the resulting pattern of keeping
+  credential-touching steps in a standalone script instead of the installer.
 
 ## Governance & branch protection
 

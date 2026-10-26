@@ -95,5 +95,24 @@ It has two halves:
    ```
    Schedule the package (e.g. daily) rather than relying on a push trigger.
 
+   The relative `.\Sync-ReleaseFromBlob.ps1` above only resolves if the script is actually present
+   in whatever directory the PDQ step runs from. There are two valid ways to make that true — pick
+   one per app:
+
+   - **Recommended: embed the script in the PowerShell step.** PDQ Deploy's PowerShell step type
+     lets you paste a script's full contents directly into the step instead of pointing at a
+     pre-existing file path. PDQ stages that pasted content to a local temp working directory
+     before executing it, which is exactly why the example above invokes it as
+     `.\Sync-ReleaseFromBlob.ps1` — relative to that temp dir — rather than an absolute path. Paste
+     in the current contents of [`Sync-ReleaseFromBlob.ps1`](./Sync-ReleaseFromBlob.ps1) for each
+     app's package.
+   - **Alternative: pre-stage one shared copy at a fixed path on `na-baw-pdq`** (e.g.
+     `C:\PDQScripts\Sync-ReleaseFromBlob.ps1`) and call it by absolute path from every app's
+     package instead of embedding it per-package. This requires someone to manually copy
+     `Sync-ReleaseFromBlob.ps1` onto `na-baw-pdq` at that exact path as a one-time step, and to
+     repeat that copy any time the script changes. Skipping this step is exactly what produces a
+     `... is not recognized as the name of a cmdlet, function, script file, or operable program.`
+     error at run time — the path was referenced, but nothing ever copied the script there.
+
 See [`eng-admin-diag-tool`](https://github.com/BraunNAM/eng-admin-diag-tool) for the first
 real example of all of the above wired end-to-end.

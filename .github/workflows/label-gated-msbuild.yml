@@ -35,6 +35,28 @@ on:
         required: false
         type: string
         default: windows-2022
+    secrets:
+      TELERIK_NUGET_USERNAME:
+        description: >
+          Optional username for a private NuGet feed configured in the caller's
+          NuGet.Config via environment-variable-based packageSourceCredentials
+          (e.g. %TELERIK_NUGET_USERNAME%). Exposed as an env var of the same
+          name on the "Restore NuGet packages" step. Not Telerik-exclusive --
+          any caller whose NuGet.Config expects this exact variable name can
+          use it; callers that don't need it can simply omit it.
+        required: false
+      TELERIK_NUGET_PASSWORD:
+        description: >
+          Optional password/API key paired with TELERIK_NUGET_USERNAME for a
+          private NuGet feed. Exposed as an env var of the same name on the
+          "Restore NuGet packages" step.
+        required: false
+      TELERIK_LICENSE:
+        description: >
+          Optional license key some commercial packages (e.g. Telerik's
+          Telerik.Licensing) read directly from the environment at build time.
+          Exposed as an env var of the same name on the "Build" step.
+        required: false
 
 jobs:
   # push events (i.e. after a PR has already merged) always run; a
@@ -62,8 +84,13 @@ jobs:
       - uses: NuGet/setup-nuget@v2
 
       - name: Restore NuGet packages
+        env:
+          TELERIK_NUGET_USERNAME: ${{ secrets.TELERIK_NUGET_USERNAME }}
+          TELERIK_NUGET_PASSWORD: ${{ secrets.TELERIK_NUGET_PASSWORD }}
         run: nuget restore "${{ inputs.solution }}" -SolutionDirectory "${{ inputs.nuget-solution-directory }}"
 
       - name: Build
+        env:
+          TELERIK_LICENSE: ${{ secrets.TELERIK_LICENSE }}
         run: msbuild "${{ inputs.solution }}" /p:Configuration=${{ inputs.configuration }} ${{ inputs.extra-msbuild-args }} /m
 

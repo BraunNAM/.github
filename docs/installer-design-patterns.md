@@ -45,6 +45,11 @@ in `dealermade-programs`: the MSI only drops files and registers an Add/Remove P
 IT/ops operator runs this script once per server, per app, as a separate deployment step, and the
 plaintext password only ever exists in that script's process memory for the duration of the call.
 
+> For BraunAmSer specifically, the current interactive-entry password is stored in 1Password
+> (vault Applications, item Account for Schedule Services) for IT/ops operators to reference
+> when running this script — it is not, and should not be, pulled automatically by the script
+> itself, per the no-persistence design above.
+
 ## 2. A WixUI wizard is fine — it's cosmetic, and silent installs skip it anyway
 
 A basic `WixUI_Minimal` wizard (License → Progress → Finish dialogs, via the

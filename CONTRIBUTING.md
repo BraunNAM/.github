@@ -12,6 +12,8 @@ here.
   [`.github/workflows/label-gated-dotnet.yml`](.github/workflows/label-gated-dotnet.yml),
   [`.github/workflows/label-gated-node.yml`](.github/workflows/label-gated-node.yml). Call one of
   these from a repo's own CI instead of hand-rolling a label-gated build/test job.
+  See [`label-gated-dotnet.yml` options](#label-gated-dotnetyml-options) below for its optional
+  test, coverage and pack steps.
 - **Release distribution (PDQ/Blob sync)** — [`scripts/pdq/README.md`](scripts/pdq/README.md) +
   [`.github/workflows/publish-release-to-blob.yml`](.github/workflows/publish-release-to-blob.yml).
   A shared, app-agnostic way to get a built release artifact from CI onto PDQ Deploy without ever
@@ -23,6 +25,76 @@ here.
   when its exact property name is explicitly listed in `MsiHiddenProperties` — there's no automatic
   redaction based on the name containing `PASSWORD`) and the resulting pattern of keeping
   credential-touching steps in a standalone script instead of the installer.
+
+### `label-gated-dotnet.yml` options
+
+By default the workflow only runs `dotnet build`, exactly as it always has. Test, coverage and pack
+are **opt-in** and run as extra steps inside the same build job. They never add jobs, so the
+check-run names stay `<caller-job> / Build Gate (requires 'Auto Build & Test' label)` and
+`<caller-job> / <job-name>`. Turning an option on doesn't change any required status check in
+`BraunNAM/it-governance`. A failing test or a missed coverage threshold fails that build check.
+
+| Input | Default | What it does |
+|---|---|---|
+| `job-name` | `Build (.NET SDK)` | Check-run display name. Changing it renames the required check. |
+| `solution` | *(required)* | `.sln`/`.slnx`/`.csproj` to build. |
+| `dotnet-version` | `8.0.x` | .NET SDK version. |
+| `configuration` | `Release` | Build/test/pack configuration. |
+| `runs-on` | `windows-2022` | Runner. Use `ubuntu-latest` for tests that need Linux containers (e.g. Testcontainers). |
+| `run-tests` | `false` | Run `dotnet test` after the build. Results (`.trx`) are uploaded as `test-results-<job-name>`. |
+| `test-project` | `solution` | What to test, if not the whole solution. |
+| `test-filter` | *(none)* | `--filter` expression, e.g. `Category!=Integration` to skip container tests on Windows. |
+| `extra-test-args` | *(none)* | Extra `dotnet test` arguments (whitespace-separated; `"double quotes"` group a value). |
+| `collect-coverage` | `false` | Collect Cobertura coverage (turns on tests too) and add a coverage summary to the job summary. |
+| `coverage-collector` | `Code Coverage;Format=cobertura` | `--collect` value. The default (Microsoft Code Coverage) ships with `Microsoft.NET.Test.Sdk`. Use `XPlat Code Coverage` for coverlet. |
+| `coverage-threshold` | `0` | Minimum merged **line** coverage %. `0` reports without enforcing. |
+| `coverage-assembly-filters` | *(none)* | ReportGenerator `-assemblyfilters`, e.g. `+Piper.*;-*.Tests`, so the threshold only counts the libraries you care about. |
+| `pack` | `false` | `dotnet pack` and upload `.nupkg`/`.snupkg` as `packages-<job-name>`. It never pushes to a feed; publishing stays in the repo's signed release workflow. |
+| `pack-project` | `solution` | What to pack, if not the whole solution. |
+| `pack-version` | *(none)* | Package version override (`-p:Version=`). |
+
+Outputs: `line-coverage`, `test-results-artifact` and `packages-artifact`. Each is empty when its
+option is off.
+
+Example: unit tests with an 80% gate on Windows, plus a second call that runs container-based
+integration tests on Linux. Each call gets its own job id and check name.
+
+```yaml
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, labeled, synchronize, reopened]
+
+jobs:
+  build:
+    uses: BraunNAM/.github/.github/workflows/label-gated-dotnet.yml@main
+    with:
+      job-name: Build & Test Piper (.NET 10)
+      solution: Piper.slnx
+      dotnet-version: 10.0.x
+      run-tests: true
+      test-filter: Category!=Integration
+      collect-coverage: true
+      coverage-threshold: 80
+      coverage-assembly-filters: +Piper.*;-*.Tests;-*.Testing
+      pack: true
+
+  integration:
+    uses: BraunNAM/.github/.github/workflows/label-gated-dotnet.yml@main
+    with:
+      job-name: Integration Tests Piper (.NET 10)
+      solution: Piper.slnx
+      dotnet-version: 10.0.x
+      runs-on: ubuntu-latest
+      run-tests: true
+      test-filter: Category=Integration
+```
+
+The test step uses VSTest-mode `dotnet test` arguments (`--logger trx`, `--collect`), which is the
+SDK default. Don't opt a repo into Microsoft.Testing.Platform mode (`"test": { "runner":
+"Microsoft.Testing.Platform" }` in `global.json`) if it uses `run-tests`. xUnit v3, NUnit and MSTest
+all run under VSTest through their usual `*.runner.visualstudio`/adapter packages.
 
 ## Governance & branch protection
 

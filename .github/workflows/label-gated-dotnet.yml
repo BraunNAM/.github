@@ -1,7 +1,27 @@
 name: Label-Gated dotnet Build
 
+# Builds an SDK-style .NET solution/project behind the 'Auto Build & Test'
+# label gate. Test, coverage and pack steps are OPTIONAL and OFF by default:
+# a caller that only passes job-name/solution/dotnet-version/configuration/
+# runs-on gets exactly the original build-only behaviour, with the same two
+# jobs and the same check-run names ("<caller-job> / Build Gate (...)" and
+# "<caller-job> / <job-name>"), so existing required status checks in
+# BraunNAM/it-governance keep matching. New behaviour is added only as
+# conditional steps inside the existing build job -- never as new jobs --
+# for that reason. See CONTRIBUTING.md for the input reference and examples.
+
 on:
   workflow_call:
+    outputs:
+      line-coverage:
+        description: Merged line coverage % (empty unless collect-coverage is true)
+        value: ${{ jobs.build.outputs.line-coverage }}
+      test-results-artifact:
+        description: Name of the uploaded test-results/coverage artifact (empty unless tests ran)
+        value: ${{ jobs.build.outputs.test-results-artifact }}
+      packages-artifact:
+        description: Name of the uploaded .nupkg/.snupkg artifact (empty unless pack is true)
+        value: ${{ jobs.build.outputs.packages-artifact }}
     inputs:
       job-name:
         description: Display name shown in the Actions UI
@@ -27,6 +47,75 @@ on:
         required: false
         type: string
         default: windows-2022
+      run-tests:
+        description: Run 'dotnet test' after the build. Off by default.
+        required: false
+        type: boolean
+        default: false
+      test-project:
+        description: .sln/.csproj to test. Defaults to the 'solution' input.
+        required: false
+        type: string
+        default: ''
+      test-filter:
+        description: >
+          Optional 'dotnet test --filter' expression, e.g. 'Category!=Integration'
+          to skip tests that need Linux containers (Testcontainers) on a
+          windows-2022 runner.
+        required: false
+        type: string
+        default: ''
+      extra-test-args:
+        description: Additional arguments appended to 'dotnet test'.
+        required: false
+        type: string
+        default: ''
+      collect-coverage:
+        description: >
+          Collect Cobertura code coverage while testing (implies run-tests) and
+          publish a summary to the job summary. Off by default.
+        required: false
+        type: boolean
+        default: false
+      coverage-collector:
+        description: >
+          'dotnet test --collect' data collector. The default (Microsoft Code
+          Coverage) ships with Microsoft.NET.Test.Sdk, so no extra package is
+          needed. Use 'XPlat Code Coverage' for coverlet.collector.
+        required: false
+        type: string
+        default: Code Coverage;Format=cobertura
+      coverage-threshold:
+        description: >
+          Minimum merged LINE coverage % (0-100). The build job fails if coverage
+          is below it. 0 (default) reports coverage without enforcing it.
+        required: false
+        type: number
+        default: 0
+      coverage-assembly-filters:
+        description: >
+          ReportGenerator -assemblyfilters value applied before the threshold
+          check, e.g. '+Piper.*;-*.Tests'. Empty includes every covered assembly.
+        required: false
+        type: string
+        default: ''
+      pack:
+        description: >
+          Run 'dotnet pack' and upload the .nupkg/.snupkg files as a workflow
+          artifact. Never pushes to a feed. Off by default.
+        required: false
+        type: boolean
+        default: false
+      pack-project:
+        description: .sln/.csproj to pack. Defaults to the 'solution' input.
+        required: false
+        type: string
+        default: ''
+      pack-version:
+        description: Optional package version override (passed as -p:Version=...).
+        required: false
+        type: string
+        default: ''
 
 jobs:
   # push events (i.e. after a PR has already merged) always run; a
@@ -48,6 +137,10 @@ jobs:
     needs: gate
     name: ${{ inputs.job-name }}
     runs-on: ${{ inputs.runs-on }}
+    outputs:
+      line-coverage: ${{ steps.coverage.outputs.line-coverage }}
+      test-results-artifact: ${{ (inputs.run-tests || inputs.collect-coverage) && steps.names.outputs.test-results || '' }}
+      packages-artifact: ${{ inputs.pack && steps.names.outputs.packages || '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -57,3 +150,113 @@ jobs:
 
       - name: Build
         run: dotnet build "${{ inputs.solution }}" --configuration ${{ inputs.configuration }}
+
+      # Everything below is skipped unless the caller opts in. Inputs reach the
+      # scripts via env (never inline ${{ }}) to avoid script injection.
+      - name: Compute artifact names
+        id: names
+        if: inputs.run-tests || inputs.collect-coverage || inputs.pack
+        shell: pwsh
+        env:
+          JOB_NAME: ${{ inputs.job-name }}
+        run: |
+          $slug = ($env:JOB_NAME -replace '[^A-Za-z0-9._-]+', '-').Trim('-').ToLowerInvariant()
+          if (-not $slug) { $slug = 'build' }
+          "test-results=test-results-$slug" >> $env:GITHUB_OUTPUT
+          "packages=packages-$slug" >> $env:GITHUB_OUTPUT
+
+      - name: Test
+        if: inputs.run-tests || inputs.collect-coverage
+        shell: pwsh
+        env:
+          TEST_PROJECT: ${{ inputs.test-project != '' && inputs.test-project || inputs.solution }}
+          CONFIGURATION: ${{ inputs.configuration }}
+          TEST_FILTER: ${{ inputs.test-filter }}
+          EXTRA_TEST_ARGS: ${{ inputs.extra-test-args }}
+          COLLECT_COVERAGE: ${{ inputs.collect-coverage }}
+          COVERAGE_COLLECTOR: ${{ inputs.coverage-collector }}
+        run: |
+          $results = Join-Path $env:RUNNER_TEMP 'test-results'
+          $testArgs = @('test', $env:TEST_PROJECT, '--configuration', $env:CONFIGURATION,
+                        '--logger', 'trx', '--results-directory', $results)
+          if ($env:TEST_FILTER) { $testArgs += @('--filter', $env:TEST_FILTER) }
+          if ($env:COLLECT_COVERAGE -eq 'true') { $testArgs += @('--collect', $env:COVERAGE_COLLECTOR) }
+          # Split extra args on whitespace, honouring "double-quoted" values.
+          if ($env:EXTRA_TEST_ARGS) {
+            $testArgs += [regex]::Matches($env:EXTRA_TEST_ARGS, '"[^"]*"|\S+') | ForEach-Object { $_.Value.Trim('"') }
+          }
+          Write-Host "dotnet $($testArgs -join ' ')"
+          & dotnet @testArgs
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Coverage report and threshold
+        id: coverage
+        if: inputs.collect-coverage
+        shell: pwsh
+        env:
+          THRESHOLD: ${{ inputs.coverage-threshold }}
+          ASSEMBLY_FILTERS: ${{ inputs.coverage-assembly-filters }}
+          REPORTGENERATOR_VERSION: 5.6.0
+        run: |
+          $results = Join-Path $env:RUNNER_TEMP 'test-results'
+          $reports = @(Get-ChildItem -Path $results -Recurse -Filter '*.cobertura.xml' -ErrorAction SilentlyContinue)
+          if ($reports.Count -eq 0) {
+            Write-Host "::error::No *.cobertura.xml coverage files were produced under $results. Check the test project references Microsoft.NET.Test.Sdk (or coverlet.collector with coverage-collector: 'XPlat Code Coverage')."
+            exit 1
+          }
+          $tools = Join-Path $env:RUNNER_TEMP 'rg-tool'
+          dotnet tool install dotnet-reportgenerator-globaltool --version $env:REPORTGENERATOR_VERSION --tool-path $tools | Out-Null
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $out = Join-Path $results 'coverage-report'
+          $rgArgs = @("-reports:$(($reports.FullName) -join ';')", "-targetdir:$out",
+                      '-reporttypes:MarkdownSummaryGithub;JsonSummary;Cobertura')
+          if ($env:ASSEMBLY_FILTERS) { $rgArgs += "-assemblyfilters:$env:ASSEMBLY_FILTERS" }
+          & (Join-Path $tools 'reportgenerator') @rgArgs
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Get-Content (Join-Path $out 'SummaryGithub.md') -Raw >> $env:GITHUB_STEP_SUMMARY
+          $line = (Get-Content (Join-Path $out 'Summary.json') -Raw | ConvertFrom-Json).summary.linecoverage
+          $threshold = [double]$env:THRESHOLD
+          "line-coverage=$line" >> $env:GITHUB_OUTPUT
+          Write-Host "Line coverage: $line% (threshold: $threshold%)"
+          if ($threshold -gt 0) {
+            if ($null -eq $line) {
+              Write-Host "::error::No coverable lines found after assembly filters; cannot enforce a $threshold% threshold."
+              exit 1
+            }
+            if ([double]$line -lt $threshold) {
+              Write-Host "::error::Line coverage $line% is below the required $threshold%."
+              exit 1
+            }
+          }
+
+      - name: Upload test results and coverage
+        if: always() && (inputs.run-tests || inputs.collect-coverage) && steps.names.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.names.outputs.test-results }}
+          path: ${{ runner.temp }}/test-results
+          if-no-files-found: ignore
+
+      - name: Pack
+        if: inputs.pack
+        shell: pwsh
+        env:
+          PACK_PROJECT: ${{ inputs.pack-project != '' && inputs.pack-project || inputs.solution }}
+          CONFIGURATION: ${{ inputs.configuration }}
+          PACK_VERSION: ${{ inputs.pack-version }}
+        run: |
+          $packArgs = @('pack', $env:PACK_PROJECT, '--configuration', $env:CONFIGURATION,
+                        '--output', (Join-Path $env:RUNNER_TEMP 'packages'))
+          if ($env:PACK_VERSION) { $packArgs += "-p:Version=$env:PACK_VERSION" }
+          & dotnet @packArgs
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Upload packages
+        if: inputs.pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.names.outputs.packages }}
+          path: |
+            ${{ runner.temp }}/packages/*.nupkg
+            ${{ runner.temp }}/packages/*.snupkg
+          if-no-files-found: error

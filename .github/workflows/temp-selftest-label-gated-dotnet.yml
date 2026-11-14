@@ -1,0 +1,95 @@
+name: TEMP self-test label-gated-dotnet
+
+# TEMPORARY: validates label-gated-dotnet.yml changes on this branch only.
+# Deleted before the PR is opened.
+
+on:
+  push:
+    branches: [mattray-braunability-shared-dotnet-ci-test-coverage-pack]
+  workflow_dispatch:
+
+jobs:
+  # (a) Existing-caller shape, called the way consumers do (remote ref).
+  defaults-remote:
+    uses: BraunNAM/.github/.github/workflows/label-gated-dotnet.yml@mattray-braunability-shared-dotnet-ci-test-coverage-pack
+    with:
+      job-name: Build SelfTest (.NET 10)
+      solution: .selftest/SelfTest.sln
+      dotnet-version: 10.0.x
+
+  # (a') Same, via local path.
+  defaults-local:
+    uses: ./.github/workflows/label-gated-dotnet.yml
+    with:
+      job-name: Build SelfTest (.NET 10)
+      solution: .selftest/SelfTest.sln
+      dotnet-version: 10.0.x
+
+  # (b) All options on windows-2022.
+  full-windows:
+    uses: ./.github/workflows/label-gated-dotnet.yml
+    with:
+      job-name: Build & Test SelfTest (windows)
+      solution: .selftest/SelfTest.sln
+      dotnet-version: 10.0.x
+      run-tests: true
+      test-filter: Category!=Integration
+      extra-test-args: --verbosity "normal"
+      collect-coverage: true
+      coverage-threshold: 30
+      coverage-assembly-filters: +SelfTest.Lib
+      pack: true
+      pack-version: 0.0.1-selftest
+
+  # (c) All options on ubuntu-latest.
+  full-ubuntu:
+    uses: ./.github/workflows/label-gated-dotnet.yml
+    with:
+      job-name: Build & Test SelfTest (ubuntu)
+      solution: .selftest/SelfTest.sln
+      dotnet-version: 10.0.x
+      runs-on: ubuntu-latest
+      run-tests: true
+      test-filter: Category!=Integration
+      collect-coverage: true
+      coverage-threshold: 30
+      coverage-assembly-filters: +SelfTest.Lib
+      pack: true
+
+  # (d) EXPECTED FAILURE: coverage below threshold.
+  expect-fail-threshold:
+    uses: ./.github/workflows/label-gated-dotnet.yml
+    with:
+      job-name: EXPECT FAIL threshold
+      solution: .selftest/SelfTest.sln
+      dotnet-version: 10.0.x
+      collect-coverage: true
+      coverage-threshold: 99
+      coverage-assembly-filters: +SelfTest.Lib
+      test-filter: Category!=Integration
+
+  # (e) EXPECTED FAILURE: no filter, so the failing integration test runs.
+  expect-fail-tests:
+    uses: ./.github/workflows/label-gated-dotnet.yml
+    with:
+      job-name: EXPECT FAIL tests
+      solution: .selftest/SelfTest.sln
+      dotnet-version: 10.0.x
+      run-tests: true
+
+  check-outputs:
+    needs: [full-windows, defaults-local]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          COV: ${{ needs.full-windows.outputs.line-coverage }}
+          TR: ${{ needs.full-windows.outputs.test-results-artifact }}
+          PK: ${{ needs.full-windows.outputs.packages-artifact }}
+          D_COV: ${{ needs.defaults-local.outputs.line-coverage }}
+          D_TR: ${{ needs.defaults-local.outputs.test-results-artifact }}
+          D_PK: ${{ needs.defaults-local.outputs.packages-artifact }}
+        run: |
+          echo "full: cov=$COV tr=$TR pk=$PK"
+          echo "defaults: cov='$D_COV' tr='$D_TR' pk='$D_PK'"
+          test -n "$COV" && test -n "$TR" && test -n "$PK"
+          test -z "$D_COV$D_TR$D_PK"

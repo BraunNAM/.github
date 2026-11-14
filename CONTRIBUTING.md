@@ -41,20 +41,36 @@ check-run names stay `<caller-job> / Build Gate (requires 'Auto Build & Test' la
 | `dotnet-version` | `8.0.x` | .NET SDK version. |
 | `configuration` | `Release` | Build/test/pack configuration. |
 | `runs-on` | `windows-2022` | Runner. Use `ubuntu-latest` for tests that need Linux containers (e.g. Testcontainers). |
-| `run-tests` | `false` | Run `dotnet test` after the build. Results (`.trx`) are uploaded as `test-results-<job-name>`. |
+| `run-tests` | `false` | Run `dotnet test` after the build. Results (`.trx`) are uploaded as an artifact (see the naming note below). |
 | `test-project` | `solution` | What to test, if not the whole solution. |
 | `test-filter` | *(none)* | `--filter` expression, e.g. `Category!=Integration` to skip container tests on Windows. |
-| `extra-test-args` | *(none)* | Extra `dotnet test` arguments (whitespace-separated; `"double quotes"` group a value). |
-| `collect-coverage` | `false` | Collect Cobertura coverage (turns on tests too) and add a coverage summary to the job summary. |
+| `extra-test-args` | *(none)* | Extra `dotnet test` arguments, split on whitespace. Double quotes group a value and are removed, e.g. `-- NUnit.Where="cat != Integration"`. |
+| `collect-coverage` | `false` | Collect Cobertura coverage (turns on tests too) and add a coverage summary to the job summary. The report tool also installs the .NET 8 SDK, after the test and pack steps. |
 | `coverage-collector` | `Code Coverage;Format=cobertura` | `--collect` value. The default (Microsoft Code Coverage) ships with `Microsoft.NET.Test.Sdk`. Use `XPlat Code Coverage` for coverlet. |
 | `coverage-threshold` | `0` | Minimum merged **line** coverage %. `0` reports without enforcing. |
 | `coverage-assembly-filters` | *(none)* | ReportGenerator `-assemblyfilters`, e.g. `+Piper.*;-*.Tests`, so the threshold only counts the libraries you care about. |
-| `pack` | `false` | `dotnet pack` and upload `.nupkg`/`.snupkg` as `packages-<job-name>`. It never pushes to a feed; publishing stays in the repo's signed release workflow. |
+| `pack` | `false` | `dotnet pack` and upload `.nupkg`/`.snupkg` as an artifact. It never pushes to a feed; publishing stays in the repo's signed release workflow. |
 | `pack-project` | `solution` | What to pack, if not the whole solution. |
 | `pack-version` | *(none)* | Package version override (`-p:Version=`). |
 
 Outputs: `line-coverage`, `test-results-artifact` and `packages-artifact`. Each is empty when its
 option is off.
+
+Artifact names are `test-results-<slug>-<hash>` and `packages-<slug>-<hash>`. `<slug>` is
+`job-name` lower-cased, with each run of characters outside `A-Z a-z 0-9 . _ -` replaced by `-`.
+`<hash>` is the first 8 hex characters of a SHA-256 of all the call's inputs. The hash keeps
+matrix legs and repeated `job-name`s from colliding, and it stays stable across re-runs. Don't
+build the name yourself. A downstream job should read it from the outputs:
+
+```yaml
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.packages-artifact }}
+```
 
 Example: unit tests with an 80% gate on Windows, plus a second call that runs container-based
 integration tests on Linux. Each call gets its own job id and check name.

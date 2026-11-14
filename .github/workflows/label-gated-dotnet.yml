@@ -159,11 +159,17 @@ jobs:
         shell: pwsh
         env:
           JOB_NAME: ${{ inputs.job-name }}
+          INPUTS_JSON: ${{ toJSON(inputs) }}
         run: |
+          # Artifact names must be unique per workflow run. A short hash of all
+          # inputs keeps matrix legs / repeated job-names from colliding while
+          # staying stable across re-runs (uploads use overwrite: true).
           $slug = ($env:JOB_NAME -replace '[^A-Za-z0-9._-]+', '-').Trim('-').ToLowerInvariant()
           if (-not $slug) { $slug = 'build' }
-          "test-results=test-results-$slug" >> $env:GITHUB_OUTPUT
-          "packages=packages-$slug" >> $env:GITHUB_OUTPUT
+          $sha = [System.Security.Cryptography.SHA256]::Create()
+          $hash = -join ($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($env:INPUTS_JSON))[0..3] | ForEach-Object { $_.ToString('x2') })
+          "test-results=test-results-$slug-$hash" >> $env:GITHUB_OUTPUT
+          "packages=packages-$slug-$hash" >> $env:GITHUB_OUTPUT
 
       - name: Test
         if: inputs.run-tests || inputs.collect-coverage
@@ -181,13 +187,47 @@ jobs:
                         '--logger', 'trx', '--results-directory', $results)
           if ($env:TEST_FILTER) { $testArgs += @('--filter', $env:TEST_FILTER) }
           if ($env:COLLECT_COVERAGE -eq 'true') { $testArgs += @('--collect', $env:COVERAGE_COLLECTOR) }
-          # Split extra args on whitespace, honouring "double-quoted" values.
+          # Split extra args on whitespace; "double-quoted" runs (whole or part
+          # of an argument, e.g. Key="a b") stay together and lose their quotes.
           if ($env:EXTRA_TEST_ARGS) {
-            $testArgs += [regex]::Matches($env:EXTRA_TEST_ARGS, '"[^"]*"|\S+') | ForEach-Object { $_.Value.Trim('"') }
+            $testArgs += [regex]::Matches($env:EXTRA_TEST_ARGS, '(?:[^\s"]+|"[^"]*")+') | ForEach-Object { $_.Value -replace '"', '' }
           }
           Write-Host "dotnet $($testArgs -join ' ')"
           & dotnet @testArgs
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Pack
+        if: inputs.pack
+        shell: pwsh
+        env:
+          PACK_PROJECT: ${{ inputs.pack-project != '' && inputs.pack-project || inputs.solution }}
+          CONFIGURATION: ${{ inputs.configuration }}
+          PACK_VERSION: ${{ inputs.pack-version }}
+        run: |
+          $packArgs = @('pack', $env:PACK_PROJECT, '--configuration', $env:CONFIGURATION,
+                        '--output', (Join-Path $env:RUNNER_TEMP 'packages'))
+          if ($env:PACK_VERSION) { $packArgs += "-p:Version=$env:PACK_VERSION" }
+          & dotnet @packArgs
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Upload packages
+        if: inputs.pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.names.outputs.packages }}
+          path: |
+            ${{ runner.temp }}/packages/*.nupkg
+            ${{ runner.temp }}/packages/*.snupkg
+          if-no-files-found: error
+          overwrite: true
+
+      # ReportGenerator needs a .NET 8+ runtime; callers may build on 6.0.x.
+      # Runs after Test and Pack so it can't change the SDK they use.
+      - name: Set up .NET 8 for ReportGenerator
+        if: inputs.collect-coverage
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
 
       - name: Coverage report and threshold
         id: coverage
@@ -205,8 +245,12 @@ jobs:
             exit 1
           }
           $tools = Join-Path $env:RUNNER_TEMP 'rg-tool'
+          # Install outside the repo so its global.json SDK pin doesn't apply.
+          Push-Location $env:RUNNER_TEMP
           dotnet tool install dotnet-reportgenerator-globaltool --version $env:REPORTGENERATOR_VERSION --tool-path $tools | Out-Null
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $installExit = $LASTEXITCODE
+          Pop-Location
+          if ($installExit) { exit $installExit }
           $out = Join-Path $results 'coverage-report'
           $rgArgs = @("-reports:$(($reports.FullName) -join ';')", "-targetdir:$out",
                       '-reporttypes:MarkdownSummaryGithub;JsonSummary;Cobertura')
@@ -236,27 +280,4 @@ jobs:
           name: ${{ steps.names.outputs.test-results }}
           path: ${{ runner.temp }}/test-results
           if-no-files-found: ignore
-
-      - name: Pack
-        if: inputs.pack
-        shell: pwsh
-        env:
-          PACK_PROJECT: ${{ inputs.pack-project != '' && inputs.pack-project || inputs.solution }}
-          CONFIGURATION: ${{ inputs.configuration }}
-          PACK_VERSION: ${{ inputs.pack-version }}
-        run: |
-          $packArgs = @('pack', $env:PACK_PROJECT, '--configuration', $env:CONFIGURATION,
-                        '--output', (Join-Path $env:RUNNER_TEMP 'packages'))
-          if ($env:PACK_VERSION) { $packArgs += "-p:Version=$env:PACK_VERSION" }
-          & dotnet @packArgs
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-
-      - name: Upload packages
-        if: inputs.pack
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.names.outputs.packages }}
-          path: |
-            ${{ runner.temp }}/packages/*.nupkg
-            ${{ runner.temp }}/packages/*.snupkg
-          if-no-files-found: error
+          overwrite: true
